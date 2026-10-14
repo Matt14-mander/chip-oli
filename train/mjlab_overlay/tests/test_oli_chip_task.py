@@ -10,6 +10,8 @@ TASK = "Mjlab-Tracking-Flat-LimX-OLI-HU-D04-CHIP"
 @pytest.mark.parametrize("play", [False, True])
 def test_oli_chip_configuration(play):
   cfg = load_env_cfg(TASK, play=play)
+  assert cfg.sim.nconmax == 128
+  assert cfg.sim.njmax == 1024
   motion = cfg.commands["motion"]
   assert motion.motion_robot == "oli" and motion.require_motion_metadata
   assert motion.anchor_body_name == "waist_pitch_link"

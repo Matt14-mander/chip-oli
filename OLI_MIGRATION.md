@@ -45,6 +45,11 @@ CUDA_VISIBLE_DEVICES=1 uv run --no-sync python -m mjlab.scripts.check_oli_chip \
 站姿文件只验证模型、FK、维度、训练和部署链路，不是步行动作，也不保证站立平衡。
 转换器拒绝覆盖已有输出文件；再次生成时使用新的文件名。
 
+若旧配置在检查环境时出现 `nconmax overflow (nconmax must be >= 36)`，
+重新应用 overlay 后直接重跑 `check_oli_chip`，无需重新生成已有 NPZ。
+OLI 的训练和 play 配置将接触容量设为 `nconmax=128`、约束容量设为
+`njmax=1024`；继承的 tracking 配置原先仅允许 35 个接触。
+
 ## 10 次 PPO 迭代检查
 
 ```bash

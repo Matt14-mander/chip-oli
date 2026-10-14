@@ -31,6 +31,11 @@ OLI_COMMAND_JOINT_NAMES = (
 
 def oli_flat_chip_tracking_env_cfg(play=False):
   cfg = unitree_g1_flat_chip_tracking_env_cfg(play=play)
+  # The inherited tracking budget (35 contacts) overflows on OLI's initial
+  # pose (36 contacts). Leave room for additional ground contacts when falling
+  # and for their friction constraints in both training and play.
+  cfg.sim.nconmax = 128
+  cfg.sim.njmax = 1024
   cfg.scene.entities = {"robot": get_oli_robot_cfg()}
   cfg.actions["joint_pos"].scale = action_scale()
   cfg.commands["motion"].anchor_body_name = "waist_pitch_link"

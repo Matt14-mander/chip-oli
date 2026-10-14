@@ -48,12 +48,16 @@ class MujocoEnv(Environment):
         self._imu_site_id = mujoco.mj_name2id(
             self.model,
             mujoco.mjtObj.mjOBJ_SITE,
-            "imu_in_pelvis",
+            cfg_env.imu_site_name,
         )
         self._imu_site_body_id = (
             int(self.model.site_bodyid[self._imu_site_id]) if self._imu_site_id >= 0 else -1
         )
         # mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
+        if cfg_env.initial_base_position is not None:
+            self.data.qpos[:3] = cfg_env.initial_base_position
+            self.data.qpos[7:] = self.default_pos
+            self.data.ctrl[:] = self.default_pos
         mujoco.mj_step(self.model, self.data)  # pyright: ignore[reportAttributeAccessIssue]
 
         self.viewer = mujoco_viewer.MujocoViewer(
@@ -63,13 +67,14 @@ class MujocoEnv(Environment):
             height=900,
             hide_menus=True,
             diable_key_callbacks=True,
-        )
-        self.viewer.cam.distance = 3.0
-        self.viewer.cam.elevation = -10.0
-        self.viewer.cam.azimuth = 180.0
+        ) if cfg_env.viewer_enabled else None
+        if self.viewer is not None:
+            self.viewer.cam.distance = 3.0
+            self.viewer.cam.elevation = -10.0
+            self.viewer.cam.azimuth = 180.0
         # self.viewer._paused = True
 
-        if cfg_env.visualize_extras:
+        if cfg_env.visualize_extras and self.viewer is not None:
             self.visualizer = MujocoVisualizer(self.viewer)
         else:
             self.visualizer = None
@@ -78,7 +83,7 @@ class MujocoEnv(Environment):
         self.random_heading = cfg_env.random_heading
         self._mouse_force_drag_enabled = False
         self._mouse_force_drag_selected_body = -1
-        self._viewer_mouse_button_callback = self.viewer._mouse_button_callback
+        self._viewer_mouse_button_callback = self.viewer._mouse_button_callback if self.viewer else None
 
         self._apply_random_heading()
 
@@ -335,7 +340,14 @@ class MujocoEnv(Environment):
                     self.data.qvel[6 : 6 + qvel_joint_len] = init_qvel[6 : 6 + qvel_joint_len]
             self.data.ctrl[:] = 0.0
         else:
-            mujoco.mj_resetDataKeyframe(self.model, self.data, 0)  # pyright: ignore[reportAttributeAccessIssue]
+            if self.model.nkey:
+                mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
+            else:
+                mujoco.mj_resetData(self.model, self.data)
+                if self.cfg_env.initial_base_position is not None:
+                    self.data.qpos[:3] = self.cfg_env.initial_base_position
+                self.data.qpos[7:] = self.default_pos
+                self.data.ctrl[:] = self.default_pos
             self._apply_random_heading()
         mujoco.mj_forward(self.model, self.data)  # pyright: ignore[reportAttributeAccessIssue]
 
@@ -416,9 +428,10 @@ class MujocoEnv(Environment):
         if hand_pose is not None:
             logger.info("Hand pose-->", hand_pose)
 
-        self.viewer.cam.lookat = self.data.qpos.astype(np.float32)[:3]
-        if self.viewer.is_alive:
-            self.viewer.render()
+        if self.viewer is not None:
+            self.viewer.cam.lookat = self.data.qpos.astype(np.float32)[:3]
+            if self.viewer.is_alive:
+                self.viewer.render()
 
         for _ in range(self.sim_decimation):
             if self.actuator_mode == "position_servo":
@@ -433,7 +446,8 @@ class MujocoEnv(Environment):
         self.update(simple=False)
 
     def shutdown(self):
-        self.viewer.close()
+        if self.viewer is not None:
+            self.viewer.close()
 
 
 if __name__ == "__main__":

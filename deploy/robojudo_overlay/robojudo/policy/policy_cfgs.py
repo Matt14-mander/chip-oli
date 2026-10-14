@@ -437,6 +437,11 @@ class ChipTrackingPolicyCfg(PolicyCfg):
 
     checkpoint_file: str = ""
     motion_file: str = ""
+    root_body_name: str = "pelvis"
+    anchor_body_name: str = "torso_link"
+    motion_body_names: list[str] | None = None
+    require_motion_metadata: bool = False
+    joint_action_scales: list[float] | None = None
     motion_time_start: float = 0.0
     motion_time_end: float | None = None
     start_in_default_pose: bool = True

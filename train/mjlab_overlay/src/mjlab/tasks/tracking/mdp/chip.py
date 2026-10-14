@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 import torch
+import numpy as np
+from mjlab.chip_common.motion import validate_motion
 
 from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
@@ -29,6 +31,14 @@ class ChipMotionCommand(MotionCommand):
   cfg: ChipMotionCommandCfg
 
   def __init__(self, cfg: ChipMotionCommandCfg, env: ManagerBasedRlEnv):
+    if cfg.require_motion_metadata:
+      robot = env.scene[cfg.entity_name]
+      with np.load(cfg.motion_file, allow_pickle=False) as data:
+        validate_motion(data, robot.joint_names, robot.body_names,
+                        robot=cfg.motion_robot, require_metadata=True)
+        fps = float(np.asarray(data["fps"]).item())
+        if abs(fps * env.step_dt - 1.0) > 1e-5:
+          raise ValueError("OLI motion fps must match the policy control frequency")
     super().__init__(cfg, env)
     if len(cfg.command_joint_names) == 0:
       raise ValueError(
@@ -187,6 +197,8 @@ class ChipMotionCommand(MotionCommand):
 
 @dataclass(kw_only=True)
 class ChipMotionCommandCfg(MotionCommandCfg):
+  motion_robot: str | None = None
+  require_motion_metadata: bool = False
   eef_body_names: tuple[str, ...]
   command_joint_names: tuple[str, ...] = ()
   compliance_range: tuple[float, float] = (0.0, 0.15)

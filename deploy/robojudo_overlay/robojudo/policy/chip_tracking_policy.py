@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from robojudo.chip_common.motion import validate_motion
 
 from robojudo.policy import Policy, policy_registry
 from robojudo.policy.policy_cfgs import ChipTrackingPolicyCfg
@@ -80,11 +81,13 @@ class _ChipTemporalCrossAttentionCore(torch.nn.Module):
         num_heads: int,
         num_layers: int,
         ff_dim: int,
+        num_joints: int = 29,
+        command_dim: int = 30,
     ):
         super().__init__()
         self.history_length = history_length
-        self.prefix_dim = 30 + 3 + 6
-        self.history_step_dims = (3, 3, 29, 29, 29)
+        self.prefix_dim = command_dim + 3 + 6
+        self.history_step_dims = (3, 3, num_joints, num_joints, num_joints)
         self.history_step_dim = sum(self.history_step_dims)
         self.history_flat_dims = tuple(d * history_length for d in self.history_step_dims)
         self.history_flat_dim = sum(self.history_flat_dims)
@@ -172,6 +175,7 @@ class _ChipAttentionActor(torch.nn.Module):
         num_heads: int,
         num_layers: int,
         ff_dim: int,
+        command_dim: int = 30,
     ):
         super().__init__()
         self.attention_core = _ChipTemporalCrossAttentionCore(
@@ -181,6 +185,8 @@ class _ChipAttentionActor(torch.nn.Module):
             num_heads=num_heads,
             num_layers=num_layers,
             ff_dim=ff_dim,
+            num_joints=out_dim,
+            command_dim=command_dim,
         )
         dims = (embed_dim, *hidden_dims, out_dim)
         layers: list[torch.nn.Module] = []
@@ -355,6 +361,11 @@ class ChipTrackingPolicy(Policy):
 
         self._obs_dim = int(self._obs_mean.shape[0])
         self._act_dim = self.num_actions
+        output_layers = [int(k.split(".")[1]) for k in actor_sd
+                         if k.startswith("mlp.") and k.endswith(".weight")]
+        checkpoint_actions = actor_sd[f"mlp.{max(output_layers)}.weight"].shape[0]
+        if checkpoint_actions != self._act_dim:
+            raise ValueError(f"Checkpoint has {checkpoint_actions} actions, robot requires {self._act_dim}")
 
         if any(k.startswith("attention_core.") for k in actor_sd):
             embed_dim = int(actor_sd["attention_core.history_proj.weight"].shape[0])
@@ -375,6 +386,7 @@ class ChipTrackingPolicy(Policy):
                 num_heads=num_heads,
                 num_layers=num_layers,
                 ff_dim=ff_dim,
+                command_dim=2 * len(cfg_policy.command_joint_names),
             ).to(self.device)
             self._actor.load_state_dict(
                 {k: v for k, v in actor_sd.items() if k.startswith(("attention_core.", "mlp."))},
@@ -400,6 +412,12 @@ class ChipTrackingPolicy(Policy):
         self._actor.eval()
 
         self._motion = _ChipMotionLoader(cfg_policy.motion_file, loop=True)
+        if cfg_policy.require_motion_metadata:
+            with np.load(cfg_policy.motion_file, allow_pickle=False) as data:
+                validate_motion(data, self.cfg_obs_dof.joint_names, cfg_policy.motion_body_names,
+                                robot=cfg_policy.robot, require_metadata=True)
+            if abs(self._motion.dt - self.dt) > 1e-6:
+                raise ValueError("OLI motion fps must match the policy control frequency")
 
         joint_names = list(self.cfg_obs_dof.joint_names)
         self._jid = {name: i for i, name in enumerate(joint_names)}
@@ -412,6 +430,10 @@ class ChipTrackingPolicy(Policy):
             "left_wrist_yaw_link": 22,
             "right_wrist_yaw_link": 29,
         }
+        if cfg_policy.motion_body_names is not None:
+            self._body_ids = {name: i for i, name in enumerate(cfg_policy.motion_body_names)}
+        self._root_body_id = self._body_ids[cfg_policy.root_body_name]
+        self._anchor_body_id = self._body_ids[cfg_policy.anchor_body_name]
         self._key_body_ids = [self._body_ids[n] for n in cfg_policy.keypoint_body_names]
 
         self._default_dof_pos = np.asarray(self.cfg_action_dof.default_pos, dtype=np.float32)
@@ -467,6 +489,12 @@ class ChipTrackingPolicy(Policy):
 
     def _build_action_scales(self, joint_names: list[str]) -> np.ndarray:
         import re
+
+        if self.cfg_policy.joint_action_scales is not None:
+            scales = np.asarray(self.cfg_policy.joint_action_scales, dtype=np.float32)
+            if scales.shape != (len(joint_names),) or not np.isfinite(scales).all() or np.any(scales <= 0):
+                raise ValueError("joint_action_scales must contain one positive finite value per joint")
+            return scales
 
         patterns = [
             (r".*_elbow_joint", 0.25 * 25.0 / 14.25062309787429),
@@ -601,8 +629,8 @@ class ChipTrackingPolicy(Policy):
             time_start=self._motion_time_start,
             time_end=self._motion_time_end,
         )
-        root_pos = self._motion.raw_body_pos(self._body_ids["pelvis"]).astype(np.float32)
-        root_quat = self._motion.body_quat(self._body_ids["pelvis"]).astype(np.float32)
+        root_pos = self._motion.raw_body_pos(self._root_body_id).astype(np.float32)
+        root_quat = self._motion.body_quat(self._root_body_id).astype(np.float32)
         joint_pos = self._motion.joint_pos_at().astype(np.float32)
         return np.concatenate([root_pos, root_quat, joint_pos], axis=0).astype(np.float32)
 
@@ -613,8 +641,8 @@ class ChipTrackingPolicy(Policy):
             time_start=self._motion_time_start,
             time_end=self._motion_time_end,
         )
-        root_lin_vel = self._motion.body_lin_vel(self._body_ids["pelvis"]).astype(np.float32)
-        root_ang_vel = self._motion.body_ang_vel(self._body_ids["pelvis"]).astype(np.float32)
+        root_lin_vel = self._motion.body_lin_vel(self._root_body_id).astype(np.float32)
+        root_ang_vel = self._motion.body_ang_vel(self._root_body_id).astype(np.float32)
         joint_vel = self._motion.joint_vel_at().astype(np.float32)
         return np.concatenate([root_lin_vel, root_ang_vel, joint_vel], axis=0).astype(np.float32)
 
@@ -645,8 +673,8 @@ class ChipTrackingPolicy(Policy):
             np.float32
         )
 
-        motion_anchor_pos_w = self._motion.body_pos(self._body_ids["torso_link"])
-        motion_anchor_quat = self._motion.body_quat(self._body_ids["torso_link"])
+        motion_anchor_pos_w = self._motion.body_pos(self._anchor_body_id)
+        motion_anchor_quat = self._motion.body_quat(self._anchor_body_id)
         anchor_pos_b = quat_rotate_inverse_np(torso_quat, motion_anchor_pos_w - torso_pos_w).astype(np.float32)
         anchor_ori_b = _quat_to_mat_first_two_cols(_quat_mul_xyzw(_quat_conj_xyzw(torso_quat), motion_anchor_quat))
 

@@ -29,6 +29,9 @@ class EnvCfg(Config):
 class MujocoEnvCfg(EnvCfg):
     env_type: str = "MujocoEnv"
     is_sim: bool = True
+    viewer_enabled: bool = True
+    imu_site_name: str = "imu_in_pelvis"
+    initial_base_position: list[float] | None = None
     # ====== ENV CONFIGURATION ======
     sim_duration: float = 60.0
     sim_dt: float = 0.001

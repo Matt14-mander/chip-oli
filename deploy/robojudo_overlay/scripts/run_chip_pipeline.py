@@ -93,14 +93,26 @@ def parse_args():
         action="store_true",
         help="Enable mouse drag perturbation in MuJoCo sim for body-force testing",
     )
+    parser.add_argument("--headless", action="store_true", help="Run simulation without a viewer or keyboard")
+    parser.add_argument("--steps", type=int, default=None, help="Stop after this many control steps")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.config == "oli_chip":
+        import robojudo.config.oli  # noqa: F401
+    if args.steps is not None and args.steps < 1:
+        raise ValueError("--steps must be positive")
     logger.info(f"Using config: {args.config}")
     config_manager = ConfigManager(config_name=args.config)
     cfg: RlPipelineCfg = config_manager.get_cfg()
+    if args.headless:
+        if not cfg.env.is_sim:
+            raise ValueError("--headless is supported only for simulation")
+        cfg.env.viewer_enabled = False
+        cfg.env.visualize_extras = False
+        cfg.ctrl = []
 
     if args.checkpoint_file is not None and hasattr(cfg, "policy"):
         cfg.policy.checkpoint_file = args.checkpoint_file
@@ -151,9 +163,14 @@ def main():
                 prepare_seconds=args.prepare_seconds,
             )
 
-    while True:
+    step_count = 0
+    while args.steps is None or step_count < args.steps:
         time_start = time.time()
         pipeline.step()
+        step_count += 1
+        if not np.isfinite(pipeline.env.dof_pos).all() or not np.isfinite(pipeline.env.dof_vel).all():
+            pipeline.env.shutdown()
+            raise RuntimeError("Non-finite joint positions during CHIP rollout")
         time_end = time.time()
         time_diff = time_end - time_start
 
@@ -169,6 +186,8 @@ def main():
                         pipeline.env.shutdown()
                         time.sleep(10)
                         break
+    pipeline.env.shutdown()
+    print(f"Completed {step_count} CHIP control steps")
 
 
 if __name__ == "__main__":

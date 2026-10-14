@@ -1,5 +1,9 @@
 # CHIP Minimal Upload
 
+OLI HU_D04 训练与仿真迁移见 [OLI_MIGRATION.md](OLI_MIGRATION.md)。
+新任务为 `Mjlab-Tracking-Flat-LimX-OLI-HU-D04-CHIP`，部署配置为 `oli_chip`。
+模型资产和来源记录位于 `robot_assets/oli/`。G1 的动作与 checkpoint 不可直接用于 OLI。
+
 This directory is a clean GitHub upload candidate that only keeps the code
 needed to train and deploy the CHIP policy.
 
